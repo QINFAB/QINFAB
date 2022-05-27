@@ -1,0 +1,233 @@
+workspace
+% TN =xlsread('A:\MLU_lt\ARGIMAR\Raw_data.xlsx','PT','B2:E2923');% read raw data
+ TN =xlsread('A:\MLU_lt\ARGIMAR\Raw_data.xlsx','NL','B2:E2923');% read raw data, i make a mistake, although i wrote NL, but the data is from PT
+%% Genetic  
+%%
+NVAR=5; % The Number of variables: Reservoir surface, Reservoir depth, Catchment surface,Infiltration capacity, Abstration capacity
+PERCI=10;
+GETI=10;
+
+%% Changing the range of  Reservoir surface, Reservoir depth, Catchment surface,Infiltration capacity, Abstration capacity
+ FieldDR=[PERCI,PERCI,PERCI,PERCI,PERCI;
+ 10,1,20000,10,20;
+ 140,15,100000,90,100;
+ 1,1,1,1,1;
+ 0,0,0,0,0;
+ 1,1,1,1,1;
+ 1,1,1,1,1];
+%  FieldDR=[PERCI,PERCI,PERCI,PERCI,PERCI;
+%  138.0938416,11.6744868,92649.07136,80,60;
+%  138.0938416,11.6744868,92649.07136,80,60;
+%  1,1,1,1,1;
+%  0,0,0,0,0;
+%  1,1,1,1,1;
+%  1,1,1,1,1];
+
+%%
+Chrom=crtbp(GETI,NVAR*PERCI);
+MAXGEN=200; % generation number
+trace=zeros(8,MAXGEN);
+X=bs2rv(Chrom,FieldDR);
+GGAP=0.9;%代沟
+cost=zeros(10,1);%一定要转置，否则后面会出现Fitv与Chrom行列不一样的情况
+for i=1:GETI
+    surface=X(i,1);
+   R_d=X(i,2);
+   Surf_C=X(i,3);  
+%    surface=round(X(i,1));% round it to integer
+%    R_d=round(X(i,2));% round it to integer
+%    Surf_C=round(X(i,3));% round it to integer
+%    Inf_ca=round(X(i,4)/10)*10;% because the a infiltration well capacity is 10, so the parameter divide by 10 must to be a integer
+%    Abs_ca=round(X(i,5)/20)*20;% because the a abtration well capacity is 20, so the parameter divide by 20 must to be a integer
+   Inf_ca=X(i,4);% because the a infiltration well capacity is 10, so the parameter divide by 10 must to be a integer
+   Abs_ca=X(i,5);
+[~,~,~,cost(i)]=I_M(surface,R_d,Surf_C,Inf_ca,Abs_ca,TN); % I_M: Irrigation Model
+end
+gen=0;
+while(gen<MAXGEN)
+ FitnV=ranking(cost);%适应度计算
+ SelCh=select('sus',Chrom,FitnV);%利用轮盘赌选择
+ SelCh=recombin('xovsp',SelCh,0.8);%参数选取单点交叉，重组概率为0.8
+ SelCh=mut(SelCh,0.002);
+ X=bs2rv(SelCh,FieldDR);
+ for i=1:GETI%计算DC
+  surface=X(i,1);
+   R_d=X(i,2);
+   Surf_C=X(i,3);
+%   surface=round(X(i,1));% round it to integer
+%   R_d=round(X(i,2));% round it to integer
+%   Surf_C=round(X(i,3));% round it to integer
+%   Inf_ca=round(X(i,4)/10)*10;% because the a infiltration well capacity is 10, so the parameter divide by 10 must to be a integer
+%   Abs_ca=round(X(i,5)/20)*20;% because the a abtration well capacity is 20, so the parameter divide by 20 must to be a integer
+   Inf_ca=X(i,4);
+   Abs_ca=X(i,5);
+ [Cost1,f_d,f_p,DCVsel(i,1)]=I_M(surface,R_d,Surf_C,Inf_ca,Abs_ca,TN); % 计算子代目标值
+ end
+ [Chrom ,cost]=reins(Chrom,SelCh,1,1,cost,DCVsel);%基于适应度插入的子代，并按插入的子代拷贝目标值
+ X=bs2rv(Chrom ,FieldDR);
+ gen=gen+1;
+ [Y ,I]=min(cost);
+%  trace(1:3,gen)=X(I,1:3); % trace 是之前定义的一个函数
+trace(1,gen)=surface;
+trace(2,gen)=R_d;
+trace(3,gen)=Surf_C;
+ trace(4,gen)=Inf_ca; % should  be Inf_ca (integer) instead of X(I,4) (with decimal)
+ trace(5,gen)=Abs_ca; % same with last line
+ trace(6,gen)=Y; 
+ trace(7,gen)=Cost1;
+ trace(8,gen)=f_p;
+ hold on;
+ 
+% [M,i]=min(DC); N=mean(DC);hold on;
+% plot3(trace(1,:),trace(2,:),trace(3,:),'bo');
+ plot(Cost1,f_p,'*r',"Markersize",3);% x: minimum cost, y:fail percentage
+%  trace(1,cost)=100;
+%  trace(2,cost)=sum(cost)/length(cost);
+end
+%% figure 1
+% figure(1)
+xlabel('Minimun cost')%x轴标记
+ylabel('Fail percentage')%y轴标记
+%% to find out when fail percentage<=0, all the cost
+pa1=[];
+for i=1:MAXGEN
+if trace(8,i)<=20
+%  if   trace(8,i)<=0
+  pa=trace(:,i);
+  pa1=[pa1,pa];
+end 
+end
+%% to locate the min cost, when fail percentage <=0
+[C,q]=min(pa1(7,:)); % C= min cost, q, index of that cost 
+final_P=pa1(:,q); % the final parameters
+
+% title('Genetic Algorithm')%标题
+% X=bs2rv(Chrom ,FieldDR);
+% % legend('The Best Nash Coefficient');
+% legend('The Best NSE','Location','southeast','NumColumns',1) 
+
+%% build model
+function [Cost1,f_d,f_p,cost]=I_M(surface,R_d,Surf_C,Inf_ca,Abs_ca,TN)
+
+max_V=R_d*surface;
+Cum_infil=zeros(length(TN),1);
+Cum_abstr=zeros(length(TN),1);
+Cum_A_I=zeros(length(TN),1);
+Res_v=zeros(length(TN),1);
+Cum_infil(1,1)=1000; % cumulated infiltration
+Cum_abstr(1,1)=200; % cumulated infiltration
+Cum_A_I(1,1)=Cum_abstr(1,1)/Cum_infil(1,1);
+Res_v(1,1)= max_V/2; 
+for i =1:length(TN)
+    %% calculate effective precipitation that leads to runoff
+    if TN(i,1)>TN(i,2)
+        FPFR(i,1)=TN(i,1)*0.35;
+    else 
+        FPFR(i,1)=0; 
+    end
+    %% actual runoff
+    if i==1
+        RUN(i,1)=FPFR(i,1)*0.1;
+    elseif i==2
+        RUN(i,1)=FPFR(i-1,1)*0.4+FPFR(i,1)*0.1; 
+    elseif i==3
+        RUN(i,1)=FPFR(i-2,1)*0.3+FPFR(i-1,1)*0.4+FPFR(i,1)*0.1;
+    elseif i==4
+        RUN(i,1)=FPFR(i-3,1)*0.15+FPFR(i-2,1)*0.3+FPFR(i-1,1)*0.4+FPFR(i,1)*0.1;
+    else 
+        RUN(i,1)=FPFR(i-4,1)*0.05+FPFR(i-3,1)*0.15+FPFR(i-2,1)*0.3+FPFR(i-1,1)*0.4+FPFR(i,1)*0.1;
+    end
+   %% runoff (in m3/day) can be transported to the reservoir
+    if Res_v(i,1)< max_V % max_V:reservoir max volume,need to define, Res_v: reservoir volume, 
+      R2R(i,1)=RUN(i,1)*Surf_C/1000; % Surf_C: surface catchement,need to define
+    else 
+       R2R(i,1)=0;
+    end 
+   %% the amount of infiltration is determined
+   if i==1
+      if Res_v(i,1)>Inf_ca %%Inf_ca: infiltration capacity, need to define
+      R2I(i,1)=Inf_ca;
+      else 
+      R2I(i,1)=0;
+      end
+   else
+      if Res_v(i-1,1)>Inf_ca %%Inf_ca: infiltration capacity, need to define
+      R2I(i,1)=Inf_ca;
+      else 
+      R2I(i,1)=0;
+      end 
+   end 
+   %% whether the date falls within the irrigation period.
+   if TN(i,3)>2 && TN(i,3)<8
+       IRR_req(i,1)=3;%mm/d
+   else 
+       IRR_req(i,1)=0;
+   end 
+      IRR_req1(i,1)=IRR_req(i,1)*10000/1000;%m3/d
+    %%  cumulative amount of water that has been infiltrated up to this day 
+    if i ==1
+       %% cumulative amount of water that has been infiltrated up to this day
+        Cum_infil(i,1)=Cum_infil(1,1)+R2I(i,1);
+       %% J here it is checked whether water can be abstracted with the capacity, 
+       if Cum_A_I(i,1)>0.499
+        M2I(i,1)=0;
+       else 
+        M2I(i,1)=IRR_req1(i,1); 
+       end 
+       %%  K calculates the net precipitation (precipitation minus evaporation) on the reservoir
+       if Res_v(i,1)>0
+       Net2R(i,1)=(TN(i,1)-TN(i,2))/1000*surface; % surface area, need to define
+       else 
+        Net2R(i,1)=TN(i,1)/1000*surface;
+       end 
+       %% cumulative amount of water that has been abstracted up to this day
+        Cum_abstr(i,1)=Cum_abstr(1,1)+M2I(i,1);
+       %% L the reservoir volume water balance
+        if (R2R(i,1)-R2I(i,1)+Net2R(i,1)+Res_v(i,1))>max_V
+        Res_v(i,1)=max_V;
+        else 
+        Res_v(i,1)=R2R(i,1)-R2I(i,1)+Net2R(i,1)+Res_v(i,1);
+        end 
+    else 
+          Cum_infil(i,1)=Cum_infil(i-1,1)+R2I(i,1);
+        if Cum_A_I(i-1,1)>0.499
+        M2I(i,1)=0;
+       else 
+        M2I(i,1)=IRR_req1(i,1); 
+        end 
+       if Res_v(i-1,1)>0
+        Net2R(i,1)=(TN(i,1)-TN(i,2))/1000*surface; % surface area, need to define
+       else 
+        Net2R(i,1)=TN(i,1)/1000*surface;
+       end 
+        Cum_abstr(i,1)=Cum_abstr(i-1,1)+M2I(i,1);
+        %% L the reservoir volume water balance
+        if (R2R(i,1)-R2I(i,1)+Net2R(i,1)+Res_v(i-1,1))>max_V
+        Res_v(i,1)=max_V;
+        else 
+        Res_v(i,1)=R2R(i,1)-R2I(i,1)+Net2R(i,1)+Res_v(i-1,1);
+        end
+    end 
+    %% calculates the ratio of cumulative water abstraction to cumulative water infiltration
+     Cum_A_I(i,1)=Cum_abstr(i,1)/Cum_infil(i,1);
+  %%  System fail, Boolean: 
+    if IRR_req1(i,1)>Abs_ca % Abs_ca: abstraction capacity, need to define
+       SF(i,1)=1;
+    elseif IRR_req(i,1)>0
+        if  M2I(i,1)>0
+            SF(i,1)=0;
+        else 
+            SF(i,1)=1;
+        end 
+    else 
+        SF(i,1)=0; 
+    end 
+end
+ f_d=sum(SF);
+ f_p=(f_d/152/8*100);% 152 days are irrigation period of a year
+%  ALL=[];
+%  ALL=[FPFR,RUN,R2R,R2I,IRR_req,IRR_req1,M2I,Net2R,Res_v,Cum_infil,Cum_abstr,Cum_A_I];
+ Cost1=Surf_C*1+max_V*50+(Inf_ca+Abs_ca)*500;
+%   cost=Cost1+Cost1*f_p*10000;
+ cost=Cost1+Cost1*(abs(20-f_p))*10000;
+end 
